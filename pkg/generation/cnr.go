@@ -96,6 +96,17 @@ func GenerateCNR(nodeGroup atlassianv1.NodeGroup, nodes []string, name, namespac
 			cnrNameLabelKey: name,
 		}
 	}
+	// Get priority from NodeGroup (default to 0 for backward compatibility)
+	priority := int32(0)
+	if nodeGroup.Spec.Priority > 0 {
+		priority = int32(nodeGroup.Spec.Priority)
+	}
+
+    // Set RequiredForNextPriority based on NodeGroup setting
+    requiredForNextPriority := false
+    if nodeGroup.Spec.RequiredForNextPriority {
+        requiredForNextPriority = true
+    }
 
 	return atlassianv1.CycleNodeRequest{
 		ObjectMeta: metav1.ObjectMeta{
@@ -112,10 +123,21 @@ func GenerateCNR(nodeGroup atlassianv1.NodeGroup, nodes []string, name, namespac
 			PreTerminationChecks:     nodeGroup.Spec.PreTerminationChecks,
 			SkipInitialHealthChecks:  nodeGroup.Spec.SkipInitialHealthChecks,
 			SkipPreTerminationChecks: nodeGroup.Spec.SkipPreTerminationChecks,
+			RequiredForNextPriority:  requiredForNextPriority,
+			Priority:                 priority,
 			ValidationOptions:        nodeGroup.Spec.ValidationOptions,
 		},
 	}
 }
+
+// ActivateCNR activates a single CNR
+func ActivateCNR(cnr *atlassianv1.CycleNodeRequest) {
+    // Update status to indicate activation
+    cnr.Status.Phase = "Pending"
+    cnr.Status.Message = fmt.Sprintf("Activated by priority system at %s", 
+	metav1.Now())
+}
+
 
 // UseGenerateNameCNR swaps name with generate name appending the "-" and blanks out Name
 func UseGenerateNameCNR(cnr *atlassianv1.CycleNodeRequest) {

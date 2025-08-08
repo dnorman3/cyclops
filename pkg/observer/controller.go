@@ -271,34 +271,7 @@ func (c *controller) dropInProgressNodeGroups(nodeGroups v1.NodeGroupList, cnrs 
 	return restingNodeGroups
 }
 
-// createCNRs generates and applies CNRs from the changedNodeGroups
-func (c *controller) createCNRs(changedNodeGroups []*ListedNodeGroups) {
-	klog.V(3).Infoln("applying")
-	for _, nodeGroup := range changedNodeGroups {
-		nodeNames := make([]string, 0, len(nodeGroup.List))
-		for _, node := range nodeGroup.List {
-			nodeNames = append(nodeNames, node.Name)
-		}
-		// generate cnr with prefix and use generate name method
-		cnr := generation.GenerateCNR(*nodeGroup.NodeGroup, nodeNames, c.CNRPrefix, c.Namespace)
-		generation.UseGenerateNameCNR(&cnr)
-		generation.GiveReason(&cnr, nodeGroup.Reason)
-		generation.SetAPIVersion(&cnr, apiVersion)
 
-		name := generation.GetName(cnr.ObjectMeta)
-
-		if err := generation.ApplyCNR(c.client, c.DryMode, cnr); err != nil {
-			klog.Errorf("failed to apply cnr %q for nodegroup %q: %s", name, nodeGroup.NodeGroup.Name, err)
-		} else {
-			var drymodeStr string
-			if c.DryMode {
-				drymodeStr = "[drymode] "
-			}
-			klog.V(2).Infof("%ssuccessfully applied cnr %q for nodegroup %q", drymodeStr, name, nodeGroup.NodeGroup.Name)
-			c.CNRsCreated.WithLabelValues(nodeGroup.NodeGroup.Name).Inc()
-		}
-	}
-}
 
 // nextRunTime returns the next time the controller loop will run from now in UTC
 func (c *controller) nextRunTime() time.Time {
@@ -319,7 +292,7 @@ func (c *controller) Run() {
 		nodeGroups = c.dropInProgressNodeGroups(nodeGroups, inProgressCNRs)
 	}
 
-	// observer the changes using the remaining nodegroups. This is stateless and will pickup changes again if restarted
+	// observe the changes using the remaining nodegroups. This is stateless and will pickup changes again if restarted
 	changedNodeGroups := c.observeChanges(nodeGroups)
 	if len(changedNodeGroups) == 0 {
 		klog.V(2).Infoln("all nodegroups up to date. next check in", c.CheckInterval)
@@ -339,7 +312,12 @@ func (c *controller) Run() {
 	select {
 	case <-time.After(c.WaitInterval):
 		klog.V(3).Infof("applying %d CNRs", len(changedNodeGroups))
+
+		// Use priority-based CNR creation
 		c.createCNRs(changedNodeGroups)
+
+		c.checkAndActivateNextPriority()
+
 		if c.RunOnce {
 			klog.V(3).Infoln("done creating CNRs after runOnce. exiting")
 		} else {
