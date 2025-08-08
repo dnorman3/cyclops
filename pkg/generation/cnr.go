@@ -102,12 +102,6 @@ func GenerateCNR(nodeGroup atlassianv1.NodeGroup, nodes []string, name, namespac
 		priority = int32(nodeGroup.Spec.Priority)
 	}
 
-    // Set RequiredForNextPriority based on NodeGroup setting
-    requiredForNextPriority := false
-    if nodeGroup.Spec.RequiredForNextPriority {
-        requiredForNextPriority = true
-    }
-
 	return atlassianv1.CycleNodeRequest{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      finalName,
@@ -123,7 +117,6 @@ func GenerateCNR(nodeGroup atlassianv1.NodeGroup, nodes []string, name, namespac
 			PreTerminationChecks:     nodeGroup.Spec.PreTerminationChecks,
 			SkipInitialHealthChecks:  nodeGroup.Spec.SkipInitialHealthChecks,
 			SkipPreTerminationChecks: nodeGroup.Spec.SkipPreTerminationChecks,
-			RequiredForNextPriority:  requiredForNextPriority,
 			Priority:                 priority,
 			ValidationOptions:        nodeGroup.Spec.ValidationOptions,
 		},
@@ -133,7 +126,7 @@ func GenerateCNR(nodeGroup atlassianv1.NodeGroup, nodes []string, name, namespac
 // ActivateCNR activates a single CNR
 func ActivateCNR(cnr *atlassianv1.CycleNodeRequest) {
     // Update status to indicate activation
-    cnr.Status.Phase = "Pending"
+    cnr.Status.Phase = atlassianv1.CycleNodeRequestPending
     cnr.Status.Message = fmt.Sprintf("Activated by priority system at %s", 
 	metav1.Now())
 }
