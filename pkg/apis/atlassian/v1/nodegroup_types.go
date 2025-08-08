@@ -40,11 +40,10 @@ type NodeGroupSpec struct {
 	// SkipPreTerminationChecks is an optional flag to skip pre-termination checks during cycling
 	SkipPreTerminationChecks bool `json:"skipPreTerminationChecks,omitempty"`
 
-	// Priority: 0 = highest priority (default nodes), 1 = lower priority (system nodes)
+	// Priority: 0 = higher priority, 1 = lower priority
+	// Higher priority groups cycle first. All lower priority groups must be healthy before higher priority groups cycle.
 	Priority int32 `json:"priority,omitempty"`
-		
-	// Must be healthy before higher priority groups cycle
-	RequiredForNextPriority bool `json:"requiredForNextPriority,omitempty"`
+
 }
 
 // NodeGroupStatus defines the observed state of NodeGroup

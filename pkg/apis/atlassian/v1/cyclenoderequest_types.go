@@ -43,15 +43,10 @@ type CycleNodeRequestSpec struct {
 	// SkipPreTerminationChecks is an optional flag to skip pre-termination checks during cycling
 	SkipPreTerminationChecks bool `json:"skipPreTerminationChecks,omitempty"`
 
-	// Priority: 0 = highest priority, 1 = lower priority
+	// Priority: 0 = higher priority, 1 = lower priority
+	// Higher priority groups cycle first. All lower priority groups must be healthy before higher priority groups cycle.
 	Priority int32 `json:"priority,omitempty"`
-		
-	// Must be healthy before higher priority groups cycle
-	RequiredForNextPriority bool `json:"requiredForNextPriority,omitempty"`
 
-	// AutoStart determines if this CNR should start automatically when dependencies are met
-	// If false, the CNR will be created but not activated until triggered by the observer
-	AutoStart bool `json:"autoStart,omitempty"`
 }
 
 // CycleNodeRequestStatus defines the observed state of CycleNodeRequest
