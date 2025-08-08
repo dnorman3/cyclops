@@ -72,53 +72,27 @@ func (c *controller) getPriority(nodeGroup *v1.NodeGroup) int32 {
 }
 
 // findNextActivatablePriority finds the lowest priority that can be activated
-func (c *controller) findNextActivatablePriority(allCNRs []v1.CycleNodeRequest) int32 {
+func (c *controller) findNextActivatablePriority(priorityGroups map[int32][]v1.CycleNodeRequest) int32 {
 	// Find the highest priority level that exists
 	maxPriority := int32(-1)
-	for _, cnr := range allCNRs {
-		if cnr.Spec.Priority > maxPriority {
-			maxPriority = cnr.Spec.Priority
+	for priority := range priorityGroups {
+		if priority > maxPriority {
+			maxPriority = priority
 		}
 	}
-	
+
 	// Check priorities in order from 0 to maxPriority
 	for priority := int32(0); priority <= maxPriority; priority++ {
-		if c.canActivatePriorityLevel(priority, allCNRs) {
+		if c.canActivatePriorityLevel(priority, priorityGroups) {
 			return priority
 		}
 	}
 	return -1 // No priority can be activated
 }
 
-// canActivatePriorityLevel checks if all CNRs at a priority level can be activated
-func (c *controller) canActivatePriorityLevel(priority int32, allCNRs []v1.CycleNodeRequest) bool {
-	// Get all CNRs at this priority level
-	priorityCNRs := c.getCNRsAtPriority(priority, allCNRs)
-	if len(priorityCNRs) == 0 {
-		return false // No CNRs at this priority
-	}
-
-	// Priority 0: Always activate immediately
-	if priority == 0 {
-		return true
-	}
-
-	// Higher priorities: Wait for all lower priorities to complete and be healthy
-	for checkPriority := int32(0); checkPriority < priority; checkPriority++ {
-		if !c.isPriorityLevelHealthy(checkPriority) {
-			return false
-		}
-	}
-
-	return true
-}
-
 // activatePriorityLevel activates all CNRs at a specific priority level
-func (c *controller) activatePriorityLevel(priority int32, allCNRs []v1.CycleNodeRequest) {
-	priorityCNRs := c.getCNRsAtPriority(priority, allCNRs)
-
-	klog.V(1).Infof("Activating priority level %d with %d CNRs",
-		priority, len(priorityCNRs))
+func (c *controller) activatePriorityLevel(priority int32, priorityCNRs []v1.CycleNodeRequest) {
+	klog.V(1).Infof("Activating priority level %d with %d CNRs", priority, len(priorityCNRs))
 
 	for _, cnr := range priorityCNRs {
 		// Activate the CNR
@@ -133,54 +107,55 @@ func (c *controller) activatePriorityLevel(priority int32, allCNRs []v1.CycleNod
 	}
 }
 
+
+
 // checkAndActivateNextPriority finds and activates the next available priority level
 func (c *controller) checkAndActivateNextPriority() {
+	// Fetch CNRs once and cache them
 	cnrs, err := generation.ListCNRs(c.client, &client.ListOptions{})
 	if err != nil {
 		klog.Errorf("failed to list CNRs: %v", err)
 		return
 	}
 
+	// Pre-group CNRs by priority for efficient lookups
+	priorityGroups := c.groupCNRsByPriority(cnrs.Items)
+
 	// Find the lowest priority CNR that can be activated
-	nextPriority := c.findNextActivatablePriority(cnrs.Items)
+			nextPriority := c.findNextActivatablePriority(priorityGroups)
 	if nextPriority == -1 {
 		return // No CNRs can be activated
 	}
 
 	// Activate all CNRs at this priority level
-	c.activatePriorityLevel(nextPriority, cnrs.Items)
+	c.activatePriorityLevel(nextPriority, priorityGroups[nextPriority])
 }
 
-// getCNRsAtPriority gets all CNRs at a specific priority level
-func (c *controller) getCNRsAtPriority(priority int32, allCNRs []v1.CycleNodeRequest) []v1.CycleNodeRequest {
-	var priorityCNRs []v1.CycleNodeRequest
-
+// groupCNRsByPriority pre-groups CNRs by priority for efficient lookups
+func (c *controller) groupCNRsByPriority(allCNRs []v1.CycleNodeRequest) map[int32][]v1.CycleNodeRequest {
+	priorityGroups := make(map[int32][]v1.CycleNodeRequest)
 	for _, cnr := range allCNRs {
-		if cnr.Spec.Priority == priority {
-			priorityCNRs = append(priorityCNRs, cnr)
-		}
+		priority := cnr.Spec.Priority
+		priorityGroups[priority] = append(priorityGroups[priority], cnr)
 	}
-
-	return priorityCNRs
+	return priorityGroups
 }
+
+
 
 // isPriorityLevelHealthy checks if nodes at a priority level are healthy
-func (c *controller) isPriorityLevelHealthy(priority int32) bool {
-	// Get CNRs at this priority level
-	cnrs, err := generation.ListCNRs(c.client, &client.ListOptions{})
-	if err != nil {
-		klog.Errorf("failed to list CNRs for health check: %v", err)
-		return false
+func (c *controller) isPriorityLevelHealthy(priority int32, priorityGroups map[int32][]v1.CycleNodeRequest) bool {
+	priorityCNRs, exists := priorityGroups[priority]
+	if !exists {
+		return false // No CNRs at this priority
 	}
 
-	priorityCNRs := c.getCNRsAtPriority(priority, cnrs.Items)
-
 	for _, cnr := range priorityCNRs {
-		// Check if CNR is complete
-        if cnr.Status.Phase != v1.CycleNodeRequestSuccessful {
-            klog.V(2).Infof("CNR %s not yet complete (phase: %s)", cnr.Name, cnr.Status.Phase)
-            return false
-        }
+		// Check if CNR is complete using proper constant
+		if cnr.Status.Phase != v1.CycleNodeRequestSuccessful {
+			klog.V(2).Infof("CNR %s not yet complete (phase: %s)", cnr.Name, cnr.Status.Phase)
+			return false
+		}
 
 		// Check if health checks are configured and passed
 		if len(cnr.Spec.HealthChecks) > 0 {
@@ -192,6 +167,28 @@ func (c *controller) isPriorityLevelHealthy(priority int32) bool {
 	}
 
 	klog.V(2).Infof("All CNRs at priority %d are complete and healthy", priority)
+	return true
+}
+// canActivatePriorityLevel checks if all CNRs at a priority level can be activated
+func (c *controller) canActivatePriorityLevel(priority int32, priorityGroups map[int32][]v1.CycleNodeRequest) bool {
+	// Get all CNRs at this priority level from pre-grouped data
+	priorityCNRs, exists := priorityGroups[priority]
+	if !exists || len(priorityCNRs) == 0 {
+		return false // No CNRs at this priority
+	}
+
+	// Priority 0: Always activate immediately
+	if priority == 0 {
+		return true
+	}
+
+	// Higher priorities: Wait for all lower priorities to complete and be healthy
+	for checkPriority := int32(0); checkPriority < priority; checkPriority++ {
+		if !c.isPriorityLevelHealthy(checkPriority, priorityGroups) {
+			return false
+		}
+	}
+
 	return true
 }
 
