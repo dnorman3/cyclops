@@ -16,6 +16,9 @@ type metrics struct {
 	CNRsCreated         *prometheus.CounterVec
 	NodeGroupsLocked    *prometheus.CounterVec
 	ObserverRunTimes    *prometheus.GaugeVec
+	PriorityActions            *prometheus.CounterVec
+	PriorityLevelHealth        *prometheus.GaugeVec
+	PriorityActivationDuration *prometheus.HistogramVec
 }
 
 // newMetrics creates the new controller metrics struct
@@ -52,6 +55,33 @@ func newMetrics() *metrics {
 				Help:      "gauge of observer runtimes in seconds",
 			},
 			[]string{"observer"},
+		),
+		
+		// Priority-specific metrics
+		PriorityActions: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name:      "priority_actions_total",
+				Namespace: metricsNamespace,
+				Help:      "Total number of priority actions performed",
+			},
+			[]string{"priority", "action"},
+		),
+		PriorityLevelHealth: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name:      "priority_level_health",
+				Namespace: metricsNamespace,
+				Help:      "Health status of priority levels (1 = healthy, 0 = unhealthy)",
+			},
+			[]string{"priority"},
+		),
+		PriorityActivationDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:      "priority_activation_duration_seconds",
+				Namespace: metricsNamespace,
+				Help:      "Time taken to activate priority levels",
+				Buckets:   prometheus.DefBuckets,
+			},
+			[]string{"priority"},
 		),
 	}
 }

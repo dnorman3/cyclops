@@ -2,6 +2,8 @@ package observer
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -9,6 +11,25 @@ import (
 	v1 "github.com/atlassian-labs/cyclops/pkg/apis/atlassian/v1"
 	"github.com/atlassian-labs/cyclops/pkg/generation"
 )
+
+// recordPriorityMetrics records priority-related metrics
+func (c *controller) recordPriorityMetrics(priority int32, action string) {
+	c.PriorityActions.WithLabelValues(fmt.Sprintf("%d", priority), action).Inc()
+}
+
+// recordPriorityHealth records the health status of a priority level
+func (c *controller) recordPriorityHealth(priority int32, healthy bool) {
+	value := 0.0
+	if healthy {
+		value = 1.0
+	}
+	c.PriorityLevelHealth.WithLabelValues(fmt.Sprintf("%d", priority)).Set(value)
+}
+
+// recordPriorityActivationDuration records the time taken to activate a priority level
+func (c *controller) recordPriorityActivationDuration(priority int32, duration time.Duration) {
+	c.PriorityActivationDuration.WithLabelValues(fmt.Sprintf("%d", priority)).Observe(duration.Seconds())
+}
 
 // groupByPriority groups node groups by their priority
 func (c *controller) groupByPriority(changedNodeGroups []*ListedNodeGroups) map[int32][]*ListedNodeGroups {
@@ -22,12 +43,26 @@ func (c *controller) groupByPriority(changedNodeGroups []*ListedNodeGroups) map[
 	return priorityGroups
 }
 
+// validatePriority validates that priority values are reasonable
+func (c *controller) validatePriority(priority int32) bool {
+    // Priority should be non-negative and reasonable
+    return priority >= 0 && priority <= 1000 // Reasonable upper limit
+}
+
 // createCNRs creates CNRs with priority-based staging
 func (c *controller) createCNRs(changedNodeGroups []*ListedNodeGroups) {
 	priorityGroups := c.groupByPriority(changedNodeGroups)
 
 	// Create ALL CNRs upfront - priority 0 starts immediately, others wait
 	for priority, groups := range priorityGroups {
+		// Validate priority
+		if !c.validatePriority(priority) {
+			klog.Errorf("Invalid priority %d for node groups, skipping", priority)
+			continue
+		}
+		
+		c.recordPriorityMetrics(priority, "cnr_created")
+		
 		for _, group := range groups {
 			nodeNames := make([]string, 0, len(group.List))
 			for _, node := range group.List {
@@ -62,13 +97,15 @@ func (c *controller) createCNRs(changedNodeGroups []*ListedNodeGroups) {
 
 // getPriority returns the priority of a node group
 func (c *controller) getPriority(nodeGroup *v1.NodeGroup) int32 {
-	// Check if NodeGroup has priority field set
-	if nodeGroup.Spec.Priority > 0 {
-		return nodeGroup.Spec.Priority
-	}
-
-	// Default to priority 0 for backward compatibility
-	return 0
+    // Return the actual priority value
+    priority := nodeGroup.Spec.Priority
+    
+    // For backward compatibility, ensure priority is non-negative
+    if priority < 0 {
+        return 0
+    }
+    
+    return priority
 }
 
 // findNextActivatablePriority finds the lowest priority that can be activated
@@ -94,6 +131,8 @@ func (c *controller) findNextActivatablePriority(priorityGroups map[int32][]v1.C
 func (c *controller) activatePriorityLevel(priority int32, priorityCNRs []v1.CycleNodeRequest) {
 	klog.V(1).Infof("Activating priority level %d with %d CNRs", priority, len(priorityCNRs))
 
+	c.recordPriorityMetrics(priority, "activation_started")
+
 	for _, cnr := range priorityCNRs {
 		// Activate the CNR
 		generation.ActivateCNR(&cnr)
@@ -101,16 +140,22 @@ func (c *controller) activatePriorityLevel(priority int32, priorityCNRs []v1.Cyc
 		// Update the CNR in the cluster
 		if err := c.client.Update(context.Background(), &cnr); err != nil {
 			klog.Errorf("Failed to activate CNR %s: %v", cnr.Name, err)
+			c.recordPriorityMetrics(priority, "activation_failed")
 		} else {
 			klog.V(2).Infof("Activated CNR %s (priority %d)", cnr.Name, priority)
+			c.recordPriorityMetrics(priority, "cnr_activated")
 		}
 	}
+	
+	c.recordPriorityMetrics(priority, "activation_completed")
 }
 
 
 
 // checkAndActivateNextPriority finds and activates the next available priority level
 func (c *controller) checkAndActivateNextPriority() {
+	start := time.Now()
+	
 	// Fetch CNRs once and cache them
 	cnrs, err := generation.ListCNRs(c.client, &client.ListOptions{})
 	if err != nil {
@@ -122,13 +167,29 @@ func (c *controller) checkAndActivateNextPriority() {
 	priorityGroups := c.groupCNRsByPriority(cnrs.Items)
 
 	// Find the lowest priority CNR that can be activated
-			nextPriority := c.findNextActivatablePriority(priorityGroups)
+	nextPriority := c.findNextActivatablePriority(priorityGroups)	
 	if nextPriority == -1 {
 		return // No CNRs can be activated
 	}
 
+	priorityCNRs, exists := priorityGroups[nextPriority]
+	if !exists {
+		klog.Errorf("Priority group %d not found in priority groups", nextPriority)
+		return
+	}
+
+	// Record activation attempt
+	c.recordPriorityMetrics(nextPriority, "activation_attempted")
+	
 	// Activate all CNRs at this priority level
-	c.activatePriorityLevel(nextPriority, priorityGroups[nextPriority])
+	c.activatePriorityLevel(nextPriority, priorityCNRs)
+	
+	// Record activation duration
+	duration := time.Since(start)
+	c.recordPriorityActivationDuration(nextPriority, duration)
+	
+	// Record successful activation
+	c.recordPriorityMetrics(nextPriority, "activation_successful")
 }
 
 // groupCNRsByPriority pre-groups CNRs by priority for efficient lookups
@@ -147,6 +208,7 @@ func (c *controller) groupCNRsByPriority(allCNRs []v1.CycleNodeRequest) map[int3
 func (c *controller) isPriorityLevelHealthy(priority int32, priorityGroups map[int32][]v1.CycleNodeRequest) bool {
 	priorityCNRs, exists := priorityGroups[priority]
 	if !exists {
+		c.recordPriorityHealth(priority, false)
 		return false // No CNRs at this priority
 	}
 
@@ -154,6 +216,7 @@ func (c *controller) isPriorityLevelHealthy(priority int32, priorityGroups map[i
 		// Check if CNR is complete using proper constant
 		if cnr.Status.Phase != v1.CycleNodeRequestSuccessful {
 			klog.V(2).Infof("CNR %s not yet complete (phase: %s)", cnr.Name, cnr.Status.Phase)
+			c.recordPriorityHealth(priority, false)
 			return false
 		}
 
@@ -161,12 +224,14 @@ func (c *controller) isPriorityLevelHealthy(priority int32, priorityGroups map[i
 		if len(cnr.Spec.HealthChecks) > 0 {
 			if !c.checkCyclopsHealthChecks(&cnr) {
 				klog.V(2).Infof("Health checks not passed for CNR %s", cnr.Name)
+				c.recordPriorityHealth(priority, false)
 				return false
 			}
 		}
 	}
 
 	klog.V(2).Infof("All CNRs at priority %d are complete and healthy", priority)
+	c.recordPriorityHealth(priority, true)
 	return true
 }
 // canActivatePriorityLevel checks if all CNRs at a priority level can be activated
