@@ -104,8 +104,8 @@ func (c *controller) canActivatePriorityLevel(priority int32, allCNRs []v1.Cycle
 	}
 
 	// Higher priorities: Wait for all lower priorities to complete and be healthy
-	for checkPriority := range priority {
-		if !c.isPriorityLevelHealthy(int32(checkPriority)) {
+	for checkPriority := int32(0); checkPriority < priority; checkPriority++ {
+		if !c.isPriorityLevelHealthy(checkPriority) {
 			return false
 		}
 	}
