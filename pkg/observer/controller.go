@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -27,7 +26,6 @@ type controller struct {
 	observers  map[string]Observer
 
 	optimisedOrder []timedKey
-	priorityLock   priorityActivationLock
 
 	*metrics
 	Options
@@ -38,13 +36,6 @@ type controller struct {
 type timedKey struct {
 	duration time.Duration
 	key      string
-}
-
-// priorityActivationLock prevents race conditions during priority activation
-type priorityActivationLock struct {
-	mu sync.Mutex
-	activePriority int32
-	isActivating bool
 }
 
 // runMetricsHandler creates the metrics struct for the controller and starts the handler and server

@@ -19,11 +19,7 @@ type metrics struct {
 	PriorityActions            *prometheus.CounterVec
 	PriorityLevelHealth        *prometheus.GaugeVec
 	PriorityActivationDuration *prometheus.HistogramVec
-	
-	// Race condition prevention metrics
 	RaceConditionPrevention   *prometheus.CounterVec
-	
-	// Deduplication metrics
 	CNRDeduplication         *prometheus.CounterVec
 }
 
