@@ -19,6 +19,12 @@ type metrics struct {
 	PriorityActions            *prometheus.CounterVec
 	PriorityLevelHealth        *prometheus.GaugeVec
 	PriorityActivationDuration *prometheus.HistogramVec
+	
+	// Race condition prevention metrics
+	RaceConditionPrevention   *prometheus.CounterVec
+	
+	// Deduplication metrics
+	CNRDeduplication         *prometheus.CounterVec
 }
 
 // newMetrics creates the new controller metrics struct
@@ -82,6 +88,26 @@ func newMetrics() *metrics {
 				Buckets:   prometheus.DefBuckets,
 			},
 			[]string{"priority"},
+		),
+		
+		// Race condition prevention metrics
+		RaceConditionPrevention: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name:      "race_condition_prevention_total",
+				Namespace: metricsNamespace,
+				Help:      "Total number of race conditions prevented",
+			},
+			[]string{"type"},
+		),
+		
+		// Deduplication metrics
+		CNRDeduplication: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name:      "cnr_deduplication_total",
+				Namespace: metricsNamespace,
+				Help:      "Total number of CNR deduplication events",
+			},
+			[]string{"nodegroup", "reason"},
 		),
 	}
 }
