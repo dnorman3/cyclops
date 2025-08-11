@@ -45,9 +45,9 @@ func (c *controller) groupByPriority(changedNodeGroups []*ListedNodeGroups) map[
 }
 
 // validatePriority validates that priority values are reasonable
+// Non-negative and capped at 1000
 func (c *controller) validatePriority(priority int32) bool {
-    // Priority should be non-negative and reasonable
-    return priority >= 0 && priority <= 1000 // Reasonable upper limit
+    return priority >= 0 && priority <= 1000
 }
 
 // createCNRs creates CNRs with priority-based staging
@@ -62,7 +62,8 @@ func (c *controller) createCNRs(changedNodeGroups []*ListedNodeGroups) {
 			continue
 		}
 		
-		c.recordPriorityMetrics(priority, "cnr_created")
+        // Record that we attempted creating CNRs at this priority
+        c.recordPriorityMetrics(priority, "cnr_create_attempted")
 		
 		for _, group := range groups {
 			nodeNames := make([]string, 0, len(group.List))
@@ -70,8 +71,8 @@ func (c *controller) createCNRs(changedNodeGroups []*ListedNodeGroups) {
 				nodeNames = append(nodeNames, node.Name)
 			}
 
-			// Generate CNR
-			cnr := generation.GenerateCNR(*group.NodeGroup, nodeNames, c.CNRPrefix, c.Namespace)
+            // Generate CNR
+            cnr := generation.NewCNR(*group.NodeGroup, nodeNames, c.CNRPrefix, c.Namespace)
 			generation.UseGenerateNameCNR(&cnr)
 			generation.GiveReason(&cnr, group.Reason)
 			generation.SetAPIVersion(&cnr, apiVersion)
@@ -82,22 +83,22 @@ func (c *controller) createCNRs(changedNodeGroups []*ListedNodeGroups) {
 			name := generation.GetName(cnr.ObjectMeta)
 
 			// Check for existing CNR to prevent duplicates
-			if c.checkForExistingCNR(group.NodeGroup.Name, nodeNames) {
+            if c.checkForExistingCNR(group.NodeGroup.Name, nodeNames) {
 				klog.V(2).Infof("Skipping CNR creation for %s - duplicate detected", name)
-				c.recordPriorityMetrics(priority, "cnr_duplicate_skipped")
-				c.recordCNRDeduplication(group.NodeGroup.Name, "duplicate_detected")
+                c.recordPriorityMetrics(priority, "cnr_create_skipped_duplicate")
+                c.recordCNRDeduplication(group.NodeGroup.Name, "duplicate_detected")
 				continue
 			}
 
 			// Retry CNR creation with backoff
-			err := c.retryWithBackoff(func() error {
-				return generation.ApplyCNR(c.client, c.DryMode, cnr)
+            err := c.retryWithBackoff(func() error {
+                return generation.CreateCNR(c.client, c.DryMode, cnr)
 			}, 2, 500*time.Millisecond) // 2 retries, 500ms initial delay
 			
-			if err != nil {
+            if err != nil {
 				klog.Errorf("failed to apply cnr %q for nodegroup %q after retries: %s", 
 					name, group.NodeGroup.Name, err)
-				c.recordPriorityMetrics(priority, "cnr_creation_failed")
+                c.recordPriorityMetrics(priority, "cnr_create_failed")
 			} else {
 				var drymodeStr string
 				if c.DryMode {
@@ -105,8 +106,8 @@ func (c *controller) createCNRs(changedNodeGroups []*ListedNodeGroups) {
 				}
 				klog.V(2).Infof("%screated cnr %q for nodegroup %q (priority %d)",
 					drymodeStr, name, group.NodeGroup.Name, priority)
-				c.CNRsCreated.WithLabelValues(group.NodeGroup.Name).Inc()
-				c.recordPriorityMetrics(priority, "cnr_creation_successful")
+                c.CNRsCreated.WithLabelValues(group.NodeGroup.Name).Inc()
+                c.recordPriorityMetrics(priority, "cnr_create_applied")
 			}
 		}
 	}
@@ -145,7 +146,8 @@ func (c *controller) findNextActivatablePriority(priorityGroups map[int32][]v1.C
 }
 
 // activatePriorityLevel activates all CNRs at a specific priority level
-func (c *controller) activatePriorityLevel(priority int32, priorityCNRs []v1.CycleNodeRequest) {
+// Returns the number of successful and failed activations
+func (c *controller) activatePriorityLevel(priority int32, priorityCNRs []v1.CycleNodeRequest) (int, int) {
 	klog.V(1).Infof("Activating priority level %d with %d CNRs", priority, len(priorityCNRs))
 
 	c.recordPriorityMetrics(priority, "activation_started")
@@ -173,58 +175,60 @@ func (c *controller) activatePriorityLevel(priority int32, priorityCNRs []v1.Cyc
 			priority, len(successfulCNRs))
 	}
 	
-	c.recordPriorityMetrics(priority, "activation_completed")
+    c.recordPriorityMetrics(priority, "activation_completed")
+    return len(successfulCNRs), len(failedCNRs)
 }
 
 
 
 // checkAndActivateNextPriority finds and activates the next available priority level
 func (c *controller) checkAndActivateNextPriority() {
-	start := time.Now()
-	
-	// Fetch CNRs once and cache them with retry
-	var cnrs *v1.CycleNodeRequestList
-	err := c.retryWithBackoff(func() error {
-		var listErr error
-		cnrs, listErr = generation.ListCNRs(c.client, &client.ListOptions{})
-		return listErr
-	}, 3, 1*time.Second) // 3 retries, 1s initial delay
-	
-	if err != nil {
-		klog.Errorf("failed to list CNRs after retries: %v", err)
-		c.recordPriorityMetrics(-1, "api_list_failed") // -1 for system-level errors
-		return
-	}
+    // Fetch CNRs once and cache them with retry
+    var cnrs *v1.CycleNodeRequestList
+    err := c.retryWithBackoff(func() error {
+        var listErr error
+        opts := &client.ListOptions{Namespace: c.Namespace}
+        cnrs, listErr = generation.ListCNRs(c.client, opts)
+        return listErr
+    }, 3, 1*time.Second) // 3 retries, 1s initial delay
+    
+    if err != nil {
+        klog.Errorf("failed to list CNRs after retries: %v", err)
+        c.recordPriorityMetrics(-1, "api_list_failed") // -1 for system-level errors
+        return
+    }
 
-	// Pre-group CNRs by priority for efficient lookups
-	priorityGroups := c.groupCNRsByPriority(cnrs.Items)
+    // Pre-group CNRs by priority for efficient lookups
+    priorityGroups := c.groupCNRsByPriority(cnrs.Items)
 
-	// Find the lowest priority CNR that can be activated
-	nextPriority := c.findNextActivatablePriority(priorityGroups)	
-	if nextPriority == -1 {
-		return // No CNRs can be activated
-	}
+    // Activate all priority levels that are currently activatable in this snapshot
+    priorities := c.getAvailablePriorities(priorityGroups)
+    for _, pr := range priorities {
+        if !c.canActivatePriorityLevel(pr, priorityGroups) {
+            continue
+        }
 
-	priorityCNRs, exists := priorityGroups[nextPriority]
-	if !exists {
-		klog.Errorf("Priority group %d not found in priority groups (available: %v)", 
-			nextPriority, c.getAvailablePriorities(priorityGroups))
-		c.recordPriorityMetrics(nextPriority, "priority_group_not_found")
-		return
-	}
+        priorityCNRs := priorityGroups[pr]
+        if len(priorityCNRs) == 0 {
+            continue
+        }
 
-	// Record activation attempt
-	c.recordPriorityMetrics(nextPriority, "activation_attempted")
-	
-	// Activate all CNRs at this priority level
-	c.activatePriorityLevel(nextPriority, priorityCNRs)
-	
-	// Record activation duration
-	duration := time.Since(start)
-	c.recordPriorityActivationDuration(nextPriority, duration)
-	
-	// Record successful activation
-	c.recordPriorityMetrics(nextPriority, "activation_successful")
+        // Record activation attempt per priority
+        c.recordPriorityMetrics(pr, "activation_attempted")
+
+        start := time.Now()
+        successCount, failureCount := c.activatePriorityLevel(pr, priorityCNRs)
+        duration := time.Since(start)
+        c.recordPriorityActivationDuration(pr, duration)
+
+        if failureCount == 0 {
+            c.recordPriorityMetrics(pr, "activation_successful")
+        } else if successCount == 0 {
+            c.recordPriorityMetrics(pr, "activation_failed")
+        } else {
+            c.recordPriorityMetrics(pr, "activation_incomplete")
+        }
+    }
 }
 
 // groupCNRsByPriority pre-groups CNRs by priority for efficient lookups
@@ -243,8 +247,9 @@ func (c *controller) groupCNRsByPriority(allCNRs []v1.CycleNodeRequest) map[int3
 func (c *controller) isPriorityLevelHealthy(priority int32, priorityGroups map[int32][]v1.CycleNodeRequest) bool {
 	priorityCNRs, exists := priorityGroups[priority]
 	if !exists {
-		c.recordPriorityHealth(priority, false)
-		return false // No CNRs at this priority
+        // Treat missing priority levels as healthy
+        c.recordPriorityHealth(priority, true)
+        return true
 	}
 
 	for _, cnr := range priorityCNRs {
@@ -371,12 +376,20 @@ func (c *controller) activateCNRWithRetry(cnr *v1.CycleNodeRequest, priority int
 
 // checkForExistingCNR checks if a CNR already exists for the given NodeGroup and nodes
 func (c *controller) checkForExistingCNR(nodeGroupName string, nodeNames []string) bool {
-	// List existing CNRs
-	cnrs, err := generation.ListCNRs(c.client, &client.ListOptions{})
-	if err != nil {
-		klog.Errorf("Failed to list CNRs for deduplication check: %v", err)
-		return false // Assume no existing CNR to be safe
-	}
+    // List existing CNRs with retries; fail-closed if persistent failures
+    var cnrs *v1.CycleNodeRequestList
+    err := c.retryWithBackoff(func() error {
+        var listErr error
+        opts := &client.ListOptions{Namespace: c.Namespace}
+        cnrs, listErr = generation.ListCNRs(c.client, opts)
+        return listErr
+    }, 3, 500*time.Millisecond)
+    if err != nil {
+        klog.Errorf("Failed to list CNRs for deduplication check after retries: %v", err)
+        c.recordCNRDeduplication(nodeGroupName, "list_failed")
+        // Treat as duplicate to prevent potential duplicates under API failures
+        return true
+    }
 	
 	// Check if any existing CNR matches this NodeGroup and nodes
 	for _, cnr := range cnrs.Items {

@@ -27,8 +27,8 @@ func ListCNRs(c client.Client, options *client.ListOptions) (*atlassianv1.CycleN
 	return &list, nil
 }
 
-// ApplyCNR takes a cnr and optionally uses dry mode in the create request
-func ApplyCNR(c client.Client, drymode bool, cnr atlassianv1.CycleNodeRequest) error {
+// CreateCNR creates a CNR and optionally uses dry mode in the create request
+func CreateCNR(c client.Client, drymode bool, cnr atlassianv1.CycleNodeRequest) error {
 	var dryruns []string
 	if drymode {
 		dryruns = []string{"All"}
@@ -83,8 +83,8 @@ func SetAPIVersion(cnr *atlassianv1.CycleNodeRequest, clientVersion string) {
 	cnr.Annotations[cyclenoderequest.ClientAPIVersionAnnotation] = clientVersion
 }
 
-// GenerateCNR creates a setup CNR from a NodeGroup with the specified params
-func GenerateCNR(nodeGroup atlassianv1.NodeGroup, nodes []string, name, namespace string) atlassianv1.CycleNodeRequest {
+// NewCNR constructs a CNR from a NodeGroup with the specified params
+func NewCNR(nodeGroup atlassianv1.NodeGroup, nodes []string, name, namespace string) atlassianv1.CycleNodeRequest {
 	finalName := fmt.Sprintf("%s-%s", name, nodeGroup.Name)
 	if name == "" {
 		finalName = nodeGroup.Name
@@ -109,6 +109,7 @@ func GenerateCNR(nodeGroup atlassianv1.NodeGroup, nodes []string, name, namespac
 			Labels:    labels,
 		},
 		Spec: atlassianv1.CycleNodeRequestSpec{
+			NodeGroupName:            nodeGroup.Spec.NodeGroupName,
 			NodeGroupsList:           nodeGroup.GetNodeGroupNames(),
 			Selector:                 nodeGroup.Spec.NodeSelector,
 			NodeNames:                nodes,
@@ -127,8 +128,7 @@ func GenerateCNR(nodeGroup atlassianv1.NodeGroup, nodes []string, name, namespac
 func ActivateCNR(cnr *atlassianv1.CycleNodeRequest) {
     // Update status to indicate activation
     cnr.Status.Phase = atlassianv1.CycleNodeRequestPending
-    cnr.Status.Message = fmt.Sprintf("Activated by priority system at %s", 
-	metav1.Now())
+    cnr.Status.Message = fmt.Sprintf("Activated by priority system at %v", metav1.Now())
 }
 
 
