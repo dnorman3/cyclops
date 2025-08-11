@@ -274,6 +274,12 @@ spec:
                   - triggerEndpoint
                   type: object
                 type: array
+              priority:
+                description: 'Priority: 0 = higher priority, 1 = lower priority Higher
+                  priority groups cycle first. All lower priority groups must be healthy
+                  before higher priority groups cycle.'
+                format: int32
+                type: integer
               selector:
                 description: Selector is the label selector used to select the nodes
                   that are to be terminated

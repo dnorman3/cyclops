@@ -194,11 +194,13 @@ spec:
                           items:
                             type: string
                           type: array
+                          x-kubernetes-list-type: atomic
                       required:
                       - key
                       - operator
                       type: object
                     type: array
+                    x-kubernetes-list-type: atomic
                   matchLabels:
                     additionalProperties:
                       type: string
@@ -306,6 +308,12 @@ spec:
                   - triggerEndpoint
                   type: object
                 type: array
+              priority:
+                description: 'Priority: 0 = higher priority, 1 = lower priority Higher
+                  priority groups cycle first. All lower priority groups must be healthy
+                  before higher priority groups cycle.'
+                format: int32
+                type: integer
               skipInitialHealthChecks:
                 description: SkipInitialHealthChecks is an optional flag to skip the
                   initial set of node health checks before cycling begins This does
