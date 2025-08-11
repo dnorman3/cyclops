@@ -87,7 +87,7 @@ func TestApplyCNR(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.testName, func(t *testing.T) {
-			cnr := GenerateCNR(tt.nodeGroup, tt.nodes, tt.name, tt.namespace)
+            cnr := NewCNR(tt.nodeGroup, tt.nodes, tt.name, tt.namespace)
 			if tt.name == "" {
 				assert.Equal(t, tt.nodeGroup.Name, cnr.Name)
 				assert.Nil(t, cnr.Labels)
@@ -223,7 +223,7 @@ func TestValidateCNR(t *testing.T) {
 			nodeLister := test.NewTestNodeWatcher(tt.nodes, test.NodeListerOptions{ReturnErrorOnList: false})
 			nodeGroup.Spec.CycleSettings.Concurrency = tt.concurrency
 			nodeGroup.Spec.CycleSettings.CyclingTimeout = tt.cyclingTimeout
-			cnr := GenerateCNR(nodeGroup, tt.nodeNames, tt.name, "kube-system")
+            cnr := NewCNR(nodeGroup, tt.nodeNames, tt.name, "kube-system")
 			ok, reason := ValidateCNR(nodeLister, cnr)
 			assert.Equal(t, tt.ok, ok)
 			assert.Equal(t, tt.reason, reason)
