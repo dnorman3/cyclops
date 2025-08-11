@@ -186,7 +186,7 @@ func (c *cycle) listNodeGroupsWithOptions() (*atlassianv1.NodeGroupList, error) 
 func (c *cycle) generateCNRs(nodeGroups *atlassianv1.NodeGroupList, name, namespace string) (*atlassianv1.CycleNodeRequestList, error) {
 	var cnrs []atlassianv1.CycleNodeRequest
 	for _, nodeGroup := range nodeGroups.Items {
-		cnr := generation.GenerateCNR(nodeGroup, c.nodesOverride(), name, namespace)
+        cnr := generation.NewCNR(nodeGroup, c.nodesOverride(), name, namespace)
 		generation.GiveReason(&cnr, "cli")
 		generation.SetAPIVersion(&cnr, apiVersion)
 
@@ -242,7 +242,7 @@ func (c *cycle) outputOrApply(cnrs *atlassianv1.CycleNodeRequestList) {
 		c.plug.Message(c.plug.CLI.Yellow(name))
 		c.plug.Message(c.plug.CLI.BrightBlue(suffix))
 
-		if err := generation.ApplyCNR(c.plug.Client, c.dryMode(), cnr); err != nil {
+        if err := generation.CreateCNR(c.plug.Client, c.dryMode(), cnr); err != nil {
 			c.plug.MessageLn("")
 			c.plug.MessageRed("[ failed ] ")
 			c.plug.MessageLn(fmt.Sprint("to apply ", c.plug.CLI.Yellow(name), c.plug.CLI.BrightBlue(suffix), " because ", err))
